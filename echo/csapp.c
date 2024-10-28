@@ -142,13 +142,21 @@ int open_clientfd(char *hostname, char *port)
     //리스트 중 문제없이 연결 가능한 서버 주소를 고르는 과정
     for (p = listp; p; p = p -> ai_next)
     {
+        printf("Trying to create socket: ai_family=%d, ai_socktype=%d, ai_protocol=%d\n", p->ai_family, p->ai_socktype, p->ai_protocol);
         //소켓 디스크립터(=식별자)를 생성 : 만약 socket() 함수 반환값이 0 이하(==-1)이라면
-        if ((clientfd = socket(p->ai_family, p->ai_socktype, p->ai_addrlen)) < 0)
+        if ((clientfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) < 0)
+        {
+            perror("소켓 생성 실패\n");
             continue; //소켓 생성 실패, 다음 주소로 넘어가기
+        }
+            
         
         //서버로 연결: 만약 연결에 실패하지 않았다면
         if (connect(clientfd, p->ai_addr, p->ai_addrlen) != -1)
+        {
+            printf("연결 성공\n");
             break; //연결 성공. 반복문 종료
+        }
         close(clientfd); //서버와의 연결 실패. 소켓을 닫고 새로운 서버를 찾기
     }
 
