@@ -3,6 +3,8 @@
 /* Recommended max cache and object sizes */
 #define MAX_CACHE_SIZE 1049000
 #define MAX_OBJECT_SIZE 102400
+#define MAX_CACHE_ENTRY 100
+#define NTHREADS 4
 
 /* You won't lose style points for including this long line in your code */
 static const char *user_agent_hdr =
@@ -13,18 +15,32 @@ static const char *user_agent_hdr =
 typedef struct {
     char *url; //캐싱한 페이지의 url
     char *response_data; //응답한 내용
-    size_t size;
+    size_t size; //캐시에 저장된 데이터의 크기
     time_t last_accessed; // 최근 접속한 시각
 } cache_entry;
 
+typedef struct {
+    int *buf;
+    int n;
+    int front;
+    int rear;
+    sem_t mutex;
+    sem_t slots;
+    sem_t items;
+} sbuf_t;
+
 //캐시 저장공간 할당
-cache_entry cache[MAX_CACHE_SIZE];
+cache_entry cache[MAX_CACHE_ENTRY];
+//캐시의 총 저장 용량 카운트
+int cache_size = 0;
+sbuf_t sbuf;
 
 void proxy_connect(int fd);
 int parse_uri(char *uri, char *host, char *port, char* uri_ptos);
-int request_to_server(int connfd, char *host, char *port, char *uri_ptos);
-char *find_in_cache(char *uri_ptos); //캐시에서 데이터 찾아내는 함수
-void store_in_cache(char *uri_ptos, char *response_data, size_t size); //캐시에 데이터 저장하는 함수
+int request_to_server(int connfd, char *uri, char *host, char *port, char *uri_ptos);
+char *find_in_cache(char *uri); //캐시에서 데이터 찾아내는 함수
+void store_in_cache(char *uri, char *response_data, size_t size); //캐시에 데이터 저장하는 함수
+void *thread(void *vargp);
 
 int main(int argc, char**argv) {
   int listenfd, connfd;
@@ -53,15 +69,19 @@ int main(int argc, char**argv) {
   return 0;
 }
 
+//클라이언트 소켓과 프록시 서버를 연결하는 함수
 void proxy_connect(int connfd)
-{
-    int clientfd;
+{   
+    //차례대로 버퍼, 호스트를 저장할 문자열, 포트를 저장할 문자열, 요청 메소드를 저장할 문자열, uri를 저장할 문자열, HTTP 버전을 저장할 문자열
     char buf[MAXLINE], host[MAXLINE], port[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
+    //rio 입출력함수 사용을 위한 변수 rio 선언
     rio_t rio;
+    //프록시 서버에서 목적지 사이트로 요청을 보낼 때 사용할 uri 주소를 저장할 문자열
     char uri_ptos[MAXLINE];
 
     Rio_readinitb(&rio, connfd);
 
+    //클라이언트로부터의 요청이 정상적이지 않다면 : return
     if (!Rio_readlineb(&rio, buf, MAXLINE))
         return;
     printf("Request headers to proxy: ");
@@ -69,7 +89,7 @@ void proxy_connect(int connfd)
     sscanf(buf, "%s %s %s", method, uri, version);
 
     parse_uri(uri, host, port, uri_ptos);
-    request_to_server(connfd, host, port, uri_ptos);
+    request_to_server(connfd, uri, host, port, uri_ptos);
     
 }
 
@@ -118,13 +138,17 @@ int parse_uri(char* uri, char* host, char* port, char* uri_ptos)
         strcpy(port, "80");
 }
 
-int request_to_server(int connfd, char *host, char *port, char *uri_ptos)
-{
+int request_to_server(int connfd, char* uri, char *host, char *port, char *uri_ptos)
+{   
+    //요청 정보를 저장할 문자열 버퍼
     char buffer[MAXLINE];
-    char *cached_response = find_in_cache(uri_ptos);
+    //캐시에 이미 기록된 응답을 가져와서 저장할 버퍼 cached_response : 아무것도 저장되어 있지 않았다면 NULL 반환
+    char *cached_response = find_in_cache(uri);
 
+    //만약에 캐시에 저장된 정보가 있었다면
     if (cached_response != NULL)
     {
+        //클라이언트 소켓으로 캐시에 저장된 응답 정보를 넘겨준다
         Rio_writen(connfd, cached_response, MAXLINE);
         return 0;
     }
@@ -156,23 +180,22 @@ int request_to_server(int connfd, char *host, char *port, char *uri_ptos)
     while ((n = Rio_readn(p_clientfd, buffer, MAXLINE)) > 0)
     {
         Rio_writen(connfd, buffer, n);
-        store_in_cache(uri_ptos, buffer, n);
+        store_in_cache(uri, buffer, n);
     }
 
     //프록시 서버의 클라이언트 소켓 닫기
     Close(p_clientfd);
     
-
     return 0;
 }
 
-char *find_in_cache(char *uri_ptos)
+char *find_in_cache(char *uri)
 {
     //캐시 메모리 공간 전체를 돌면서
-    for (int i = 0; i < MAX_CACHE_SIZE; i++)
+    for (int i = 0; i < MAX_CACHE_ENTRY; i++)
     {   
         //만약 캐시 url이 유효하고, url과 uri_ptos가 같다면
-        if (cache[i].url != NULL && strcmp(cache[i].url, uri_ptos) == 0)
+        if (cache[i].url != NULL && strcmp(cache[i].url, uri) == 0)
         {
             //저장해뒀던 데이터 반환
             return cache[i].response_data;
@@ -182,18 +205,41 @@ char *find_in_cache(char *uri_ptos)
     return NULL;
 }
 
-void store_in_cache(char *uri_ptos, char *response_data, size_t size)
-{
-    for (int i = 0; i < MAX_CACHE_SIZE; i++)
+//캐시에 응답 데이터를 저장하는 함수 store_in_cache
+void store_in_cache(char *uri, char *response_data, size_t size)
+{   
+    //현재 저장된 용량이 최대 한도를 초과한다면 : return
+    if (cache_size + size > MAX_CACHE_SIZE)
+        return;
+    //캐시 저장 공간 전체를 돌면서
+    for (int i = 0; i < MAX_CACHE_ENTRY; i++)
     {
+        //만약 비어있는 공간을 찾았다
         if (cache[i].url == NULL)
         {
-            cache[i].url = strdup(uri_ptos);
+            //사이트의 uri 정보를 기입
+            cache[i].url = strdup(uri);
+            //응답 데이터(HTML문서가 될 수도 있고, 이진 바이너리 데이터가 될 수도 있다)를 기록할 저장 공간을 할당한 후
             cache[i].response_data = malloc(size);
+            //해당 공간으로 memcpy해서 응답 데이터 저장
             memcpy(cache[i].response_data, response_data, size);
+            //응답 데이터 크기를 기입
             cache[i].size = size;
+            //cache_size 전역변수에 size 추가
+            cache_size += size;
+            //마지막 접근 시간 기록
             cache[i].last_accessed = time(NULL);
             return;
         }
     }
 }
+
+// void *thread(void *vargp)
+// {
+//     int connfd = *((int *)vargp);
+//     Free(vargp);
+//     Pthread_detach(pthread_self());
+//     proxy_connect(connfd);
+//     Close(connfd);
+//     return NULL;
+// }
