@@ -2,6 +2,10 @@
  * csapp.h - prototypes and definitions for the CS:APP3e book
  */
 /* $begin csapp.h */
+
+#define _POSIX_C_SOURCE 200112L
+#define _XOPEN_SOURCE 600
+
 #ifndef __CSAPP_H__
 #define __CSAPP_H__
 
