@@ -7,13 +7,14 @@
  *   - Fixed sprintf() aliasing issue in serve_static(), and clienterror().
  */
 #include "csapp.h"
+#define No119
 
 void doit(int fd);
 void read_requesthdrs(rio_t *rp);
 int parse_uri(char *uri, char *filename, char *cgiargs);
-void serve_static(int fd, char *filename, int filesize);
+void serve_static(int fd, char *filename, int filesize, char * method);
 void get_filetype(char *filename, char *filetype);
-void serve_dynamic(int fd, char *filename, char *cgiargs);
+void serve_dynamic(int fd, char *filename, char *cgiargs, char* method);
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg,
                  char *longmsg);
 
@@ -57,7 +58,7 @@ void doit(int fd)
   printf("Request headers: ");
   printf("%s", buf);
   sscanf(buf, "%s %s %s", method, uri, version);
-  if (strcasecmp(method, "GET"))
+  if (strcmp(method, "GET") != 0 && strcmp(method, "HEAD") != 0)
   {
     clienterror(fd, method, "501", "Not implemented", "Tiny does not implement this method");
     return;
@@ -76,6 +77,8 @@ void doit(int fd)
     return;
   }
 
+
+
   if (is_static) {
     //S_ISREG : 파일 모드를 검사하여 해당 파일이 일반 파일인지를 검사
     //S_IRUSR 매크로 상수 : 파일의 소유자에게 읽기 권한이 있는지 나타내는 매크로 함수. 파일의 소유자는 당연히 Tiny 서버
@@ -84,17 +87,19 @@ void doit(int fd)
       clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't read this file");
       return;
     }
-    serve_static(fd, filename, sbuf.st_size);
+    serve_static(fd, filename, sbuf.st_size, method);
   }
 
   else //동적 컨텐츠를 요청한 경우 : 하위 조건문은 정적 컨텐츠의 경우와 동일
   {
     if (!(S_ISREG(sbuf.st_mode)) || !(S_IXUSR & sbuf.st_mode))
     {
+      if(S_ISREG(sbuf.st_mode))
+        printf("권한 없음\n");
       clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't run the CGI program");
       return;
     }
-     serve_dynamic(fd, filename, cgiargs);
+     serve_dynamic(fd, filename, cgiargs, method);
   }
 }
 
@@ -176,8 +181,9 @@ int parse_uri(char *uri, char *filename, char *cgiargs)
   }
 }
 
-void serve_static(int fd, char *filename, int filesize)
+void serve_static(int fd, char *filename, int filesize, char* method)
 {
+  //서버 소켓의 파일 디스크립터
   int srcfd;
   char *srcp, filetype[MAXLINE], buf[MAXBUF];
 
@@ -195,14 +201,52 @@ void serve_static(int fd, char *filename, int filesize)
   printf("Response headers:\n");
   printf("%s", buf);
 
-  //Open의 매개변수에는 filename이라는 이름의 변수가 전달되긴 했지만, 실제로는 파일 경로를 전달하면 됨
-  //즉, 아무것도 입력하지 않은 경우에는 ./home.html이 전달되고
-  //tiny 실행 파일 이외의 경로릐 파일을 열게 된다면 ./directory1/directory2/file 같은 느낌의 문자열이 전달되는 것임
-  srcfd = Open(filename, O_RDONLY, 0);
-  srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0);
-  Close(srcfd);
-  Rio_writen(fd, srcp, filesize);
-  Munmap(srcp, filesize);
+  if (strcmp(method, "GET") == 0)
+  {
+      // #ifdef No119
+      // 파일을 읽고 클라이언트에게 전송
+      srcfd = Open(filename, O_RDONLY, 0); // 파일을 읽기 전용으로 엶
+      srcp = (char*) malloc(filesize); // 파일 크기만큼 메모리 할당
+      if (Rio_readn(srcfd, srcp, filesize) != filesize)
+      {
+          fprintf(stderr, "File read failed\n");
+          Close(srcfd);
+          free(srcp);
+          return;
+      }
+      Close(srcfd); // 파일 닫기
+
+      // 파일 내용을 클라이언트에게 전송
+      //Rio_writen(fd, srcp, filesize);
+      if (rio_writen(fd, srcp, filesize) != filesize)
+      {
+          fprintf(stderr, "File write to client failed\n");
+          free(srcp);
+          return;
+      }
+      // if (Rio_writen(fd, srcp, filesize) != filesize)
+      // {
+      //     fprintf(stderr, "File write to client failed\n");
+      //     free(srcp);
+      //     return;
+      // };
+
+      // 할당된 메모리 해제
+      free(srcp);
+      // #endif
+
+      // #ifdef ORIGIN
+      // //Open의 매개변수에는 filename이라는 이름의 변수가 전달되긴 했지만, 실제로는 파일 경로를 전달하면 됨
+      // //즉, 아무것도 입력하지 않은 경우에는 ./home.html이 전달되고
+      // //tiny 실행 파일 이외의 경로릐 파일을 열게 된다면 ./directory1/directory2/file 같은 느낌의 문자열이 전달되는 것임
+      // srcfd = Open(filename, O_RDONLY, 0);
+      // srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0);
+      // Close(srcfd);
+      // Rio_writen(fd, srcp, filesize);
+      // Munmap(srcp, filesize);
+      // #endif
+      }
+
 }
 
 void get_filetype(char *filename, char *filetype)
@@ -221,7 +265,7 @@ void get_filetype(char *filename, char *filetype)
     strcpy(filetype, "text/plain");
 }
 
-void serve_dynamic(int fd, char *filename, char *cgiargs)
+void serve_dynamic(int fd, char *filename, char *cgiargs, char* method)
 {
   char buf[MAXLINE], *emptylist[] = { NULL };
 
@@ -229,6 +273,15 @@ void serve_dynamic(int fd, char *filename, char *cgiargs)
   Rio_writen(fd, buf, strlen(buf));
   sprintf(buf, "Server: Tiny Web Server\r\n");
   Rio_writen(fd, buf, strlen(buf));
+
+  //HEAD 메소드로 요청을 보냈다면
+  if (strcmp(method, "HEAD") == 0)
+  {
+    sprintf(buf, "%sContent-type: text/html\r\n", buf);
+    sprintf(buf, "%sContent-length: %d\r\n\r\n", buf, 0);
+    Rio_writen(fd, buf, strlen(buf));
+    return;
+  }
 
   if (Fork() == 0)
   {
