@@ -35,18 +35,19 @@ cache_entry cache[MAX_CACHE_ENTRY];
 int cache_size = 0;
 sbuf_t sbuf;
 
-void proxy_connect(int fd);
+void proxy_connect(void *vargp);
 int parse_uri(char *uri, char *host, char *port, char* uri_ptos);
 int request_to_server(int connfd, char *uri, char *host, char *port, char *uri_ptos);
 char *find_in_cache(char *uri); //캐시에서 데이터 찾아내는 함수
 void store_in_cache(char *uri, char *response_data, size_t size); //캐시에 데이터 저장하는 함수
-void *thread(void *vargp);
 
 int main(int argc, char**argv) {
   int listenfd, connfd;
+  int *connfdp;
   char hostname[MAXLINE], port[MAXLINE];
   socklen_t clientlen;
   struct sockaddr_storage clientaddr;
+  pthread_t tid;
 
   if (argc != 2)
   {
@@ -58,11 +59,14 @@ int main(int argc, char**argv) {
   while(1)
   {
       clientlen = sizeof(clientaddr);
+      connfdp = malloc(sizeof(int));
       connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);
+      //*connfdp = Accept(listenfd, (SA *)&clientaddr, &clientlen);
       Getnameinfo((SA *)&clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE, 0);
       printf("Accepted connection from (%s, %s)\n", hostname, port);
-      proxy_connect(connfd);
-      Close(connfd);
+      Pthread_create(&tid, NULL, proxy_connect, &connfd);
+      //proxy_connect(connfd);
+      //Close(connfd);
 
   }
 
@@ -70,8 +74,10 @@ int main(int argc, char**argv) {
 }
 
 //클라이언트 소켓과 프록시 서버를 연결하는 함수
-void proxy_connect(int connfd)
+void proxy_connect(void *vargp)
 {   
+    int connfd = *(int *)vargp;
+
     //차례대로 버퍼, 호스트를 저장할 문자열, 포트를 저장할 문자열, 요청 메소드를 저장할 문자열, uri를 저장할 문자열, HTTP 버전을 저장할 문자열
     char buf[MAXLINE], host[MAXLINE], port[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
     //rio 입출력함수 사용을 위한 변수 rio 선언
@@ -91,6 +97,7 @@ void proxy_connect(int connfd)
     parse_uri(uri, host, port, uri_ptos);
     request_to_server(connfd, uri, host, port, uri_ptos);
     
+    Close(connfd);
 }
 
 int parse_uri(char* uri, char* host, char* port, char* uri_ptos)
@@ -233,13 +240,3 @@ void store_in_cache(char *uri, char *response_data, size_t size)
         }
     }
 }
-
-// void *thread(void *vargp)
-// {
-//     int connfd = *((int *)vargp);
-//     Free(vargp);
-//     Pthread_detach(pthread_self());
-//     proxy_connect(connfd);
-//     Close(connfd);
-//     return NULL;
-// }
