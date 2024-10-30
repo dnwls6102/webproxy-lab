@@ -54,6 +54,8 @@ void doit(int fd)
   //rio 입출력함수 사용을 위해 rio 변수 초기화
   Rio_readinitb(&rio, fd);
   //rio 변수의 버퍼에 저장된 값을 한 줄씩 읽어 buf에 저장
+  //HTTP 요청 처리의 종료 조건 : Rio_readlineb가 EOF를 만나면 종료
+  //만약 Rio_readlineb가 EOF를 만나지 못한다면, 요청을 계속해서 읽어오게 되고, 응답을 반복적으로 생성할 수 있음
   if (!Rio_readlineb(&rio, buf, MAXLINE))
       return; //만약 클라이언트 소켓으로부터 요청을 읽어들이지 못했다면 doit함수 종료
   printf("Request headers: ");
@@ -201,6 +203,7 @@ void serve_static(int fd, char *filename, int filesize, char* method)
   //그리고 헤더 내용을 그대로 콘솔창에도 출력
   printf("Response headers:\n");
   printf("%s", buf);
+  printf("요 부분이 반복됨\n");
 
   if (strcmp(method, "GET") == 0)
   {
