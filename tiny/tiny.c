@@ -203,7 +203,6 @@ void serve_static(int fd, char *filename, int filesize, char* method)
   //그리고 헤더 내용을 그대로 콘솔창에도 출력
   printf("Response headers:\n");
   printf("%s", buf);
-  printf("요 부분이 반복됨\n");
 
   if (strcmp(method, "GET") == 0)
   {
