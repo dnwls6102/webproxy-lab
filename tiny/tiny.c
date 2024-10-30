@@ -54,7 +54,8 @@ void doit(int fd)
   //rio 입출력함수 사용을 위해 rio 변수 초기화
   Rio_readinitb(&rio, fd);
   //rio 변수의 버퍼에 저장된 값을 한 줄씩 읽어 buf에 저장
-  Rio_readlineb(&rio, buf, MAXLINE);
+  if (!Rio_readlineb(&rio, buf, MAXLINE))
+      return; //만약 클라이언트 소켓으로부터 요청을 읽어들이지 못했다면 doit함수 종료
   printf("Request headers: ");
   printf("%s", buf);
   sscanf(buf, "%s %s %s", method, uri, version);
@@ -76,8 +77,6 @@ void doit(int fd)
     clienterror(fd, filename, "404", "Not found", "Tiny couldn't find this file");
     return;
   }
-
-
 
   if (is_static) {
     //S_ISREG : 파일 모드를 검사하여 해당 파일이 일반 파일인지를 검사
