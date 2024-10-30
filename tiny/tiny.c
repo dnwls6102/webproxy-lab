@@ -91,10 +91,12 @@ void doit(int fd)
 
   else //동적 컨텐츠를 요청한 경우 : 하위 조건문은 정적 컨텐츠의 경우와 동일
   {
+    //S_IXUSR : 파일의 소유자에게 실행 권한이 있는지를 확인하는 데에 사용됨
+    //모든 파일들은 바이너리 구조로 구성됨. S_IXUSR과의 비트 연산을 사용하면 해당 파일의 실행 권한 여부를 확인 가능
+    //HTML은 단순 텍스트 파일. 즉 실행 가능한 파일이 아니기에 사용자에게 실행 권한이 없는 것이다
+    //그래서 S_IXUSR & sbuf.st_mode는 FALSE가 나오는 것이고, 그래서 cgi_bin에 html파일을 두면 안되는 것이다
     if (!(S_ISREG(sbuf.st_mode)) || !(S_IXUSR & sbuf.st_mode))
     {
-      if(S_ISREG(sbuf.st_mode))
-        printf("권한 없음\n");
       clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't run the CGI program");
       return;
     }
@@ -282,11 +284,29 @@ void serve_dynamic(int fd, char *filename, char *cgiargs, char* method)
     return;
   }
 
+  //Fork(): 현재 프로세스를 복사하여 자식 프로세스를 생성하는 시스템 콜
+  //Fork()의 반환값이 0이다 : 자식 프로세스에서 호출되었음을 의미
+  //부모 프로세스는 계속해서 요청을 받고 있어야 하기 때문에(listening 소켓)
+  //자식 프로세스를 별도로 생성하여 클라이언트 소켓의 요청을 처리한다
+  //정적 콘텐츠를 보여줄 때 별도의 프로세스를 생성하지 않는 이유: 단순한 파일 전송 작업이라 굳이 필요하지 않음
   if (Fork() == 0)
   {
+    //setenv : 환경 변수 설정 함수. QUERY_STRING 환경 변수를 cgiargs(현재 ? 이후 100 & 300 부분이 저장되어 있음)로 설정.
+    //setenv의 세 번째 매개변수 1 : 0이면 기존의 환경 변수 내용을 덮어쓰지 않음. 1이면 덮어 씀.
     setenv("QUERY_STRING", cgiargs, 1);
+    //Dup2 : 파일 디스크립터를 복제하는 함수. 첫 번째 매개변수가 복제할 원본 파일 디스크립터
+    //두 번째 매개변수는 복제한 파일 디스크립터가 가리킬 파일 디스크립터
+    //표준 출력이 fd와 동일한 파일을 가리키게 된다 : 즉 이제 표준 출력으로 받은 값들은 클라이언트 소켓으로 그대로 넘어간다.
+    //다시 말하자면, 기존에 표준 출력에 부여된 1이라는 파일 디스크립터 값이 이제 fd와 동일한 값으로 바뀌면서
+    //프로세스에서 표준 출력을 호출하고, 값을 입력하면 콘솔창에 출력되는 게 아니고 클라이언트 소켓에 저장되는 것이다
+    //언제까지? 프로세스가 종료되거나(Close), 또다른 Dup2 함수로 표준 출력이 가리키는 디스크립터가 다시 원본으로 바뀔때까지
     Dup2(fd, STDOUT_FILENO);
+    //filename : CGI 프로그램이 저장된 경로
+    //environ : 환경 변수 목록
+    //Execve의 두 번째 매개변수 : 프로그램의 인자 목록, 즉 프로그램 시작할 때 같이 전달하는 변수들
+    //emptylist를 사용한다는 것 : 별 다른 인자를 전달하지 않겠다는 의미. CGI 프로그램이 별 다른 인자 없이 실행됨을 의미한다
     Execve(filename, emptylist, environ);
+    //만약 filename에 html 파일의 경로가 들어간다면, execve 함수는 -1을 반환하고 ENOTEXEC(파일이 실행 가능한 형식이 아님) errno를 설정할 것임
   }
   Wait(NULL);
 }
